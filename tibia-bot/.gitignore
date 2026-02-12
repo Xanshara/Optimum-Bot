@@ -1,0 +1,88 @@
+# Scala & SBT
+target/
+project/target/
+project/project/
+.bsp/
+.idea/
+*.class
+*.log
+*.jar
+!project/plugins.sbt
+
+# IDE
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compilation artifacts
+*.o
+*.so
+*.dylib
+*.dll
+
+# SBT specific
+lib_managed/
+src_managed/
+project/boot/
+project/plugins/project/
+.history
+.cache
+.lib/
+
+# Scala-IDE specific
+.scala_dependencies
+.worksheet
+
+# CRITICAL: Environment & Secrets
+prod.env
+dev.env
+.env
+*.env
+!.env.example
+docker.img
+.secrets
+credentials.json
+
+# Database
+*.db
+*.sqlite
+*.sql
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+jar-contents.txt
+
+# OS specific
+Thumbs.db
+Desktop.ini
+
+# Build artifacts from JAR inspection
+META-INF/
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Test coverage
+coverage/
+.coverage
+
+# Node (if using any JS tooling)
+node_modules/
+package-lock.json
+yarn.lock
