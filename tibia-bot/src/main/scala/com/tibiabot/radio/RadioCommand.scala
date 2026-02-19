@@ -9,6 +9,7 @@ import com.typesafe.scalalogging.LazyLogging
 /**
  * RadioCommand - Listener dla komendy /radio
  * Obsługuje włączanie/wyłączanie streamingu radia na kanałach głosowych
+ * Ze wsparciem auto-restart po restarcie bota
  */
 class RadioCommand extends ListenerAdapter with LazyLogging {
   
@@ -80,10 +81,24 @@ class RadioCommand extends ListenerAdapter with LazyLogging {
       track => {
         logger.info(s"Radio uruchomione pomyślnie na guild ${guild.getId}")
         val streamName = track.getInfo.title
+        
+        // 💾 ZAPISZ STAN DO BAZY DANYCH
+        RadioStateRepository.saveRadioState(
+          guild.getIdLong,
+          voiceChannel.getIdLong,
+          streamUrl
+        ) match {
+          case scala.util.Success(_) =>
+            logger.info(s"✅ Stan radia zapisany do bazy dla guild ${guild.getId}")
+          case scala.util.Failure(e) =>
+            logger.warn(s"⚠️ Nie udało się zapisać stanu radia: ${e.getMessage}")
+        }
+        
         event.getHook.sendMessage(
           s"✅ **Radio** włączone na kanale **${voiceChannel.getName}**!\n" +
           s"🎵 Odtwarzanie: **$streamName**\n" +
-          s"🔗 Stream: `$streamUrl`"
+          s"🔗 Stream: `$streamUrl`\n" +
+          s"🔄 Radio będzie automatycznie wznowione po restarcie bota!"
         ).queue()
       },
       error => {
@@ -97,7 +112,7 @@ class RadioCommand extends ListenerAdapter with LazyLogging {
     )
   }
   
-private def handleRadioOff(event: SlashCommandInteractionEvent): Unit = {
+  private def handleRadioOff(event: SlashCommandInteractionEvent): Unit = {
     val guild = event.getGuild
     if (guild == null) {
       event.reply("❌ Ta komenda działa tylko na serwerze!").setEphemeral(true).queue()
@@ -119,6 +134,14 @@ private def handleRadioOff(event: SlashCommandInteractionEvent): Unit = {
     // Zatrzymaj player i rozłącz
     AudioManager.stopPlayer(guild.getIdLong)
     audioManager.closeAudioConnection()
+    
+    // 🗑️ USUŃ STAN Z BAZY DANYCH
+    RadioStateRepository.removeRadioState(guild.getIdLong) match {
+      case scala.util.Success(_) =>
+        logger.info(s"✅ Stan radia usunięty z bazy dla guild ${guild.getId}")
+      case scala.util.Failure(e) =>
+        logger.warn(s"⚠️ Nie udało się usunąć stanu radia: ${e.getMessage}")
+    }
     
     // Użyj getHook() zamiast reply() bo już zrobiliśmy defer
     event.getHook.sendMessage("✅ **Radio wyłączone** - bot rozłączył się z kanału głosowego.").queue()

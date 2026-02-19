@@ -34,9 +34,9 @@ import com.tibiabot.blacklist.{BlacklistListener, BlacklistManager}
 import com.tibiabot.reactionrole.{ReactionRoleManager, ReactionRoleListener, ReactionRoleCommands}
 import com.tibiabot.postac_info.CharacterInfoListener
 import com.tibiabot.changenick.{ChangeNickListener, NicknameUpdateScheduler}
-import com.tibiabot.radio.RadioCommand
+import com.tibiabot.radio.{RadioCommand, RadioStateRepository, AudioManager}
 import net.dv8tion.jda.api.entities.channel.ChannelType
-import com.tibiabot.poll.{PollManager, PollListener, PollCommand, PollScheduler}
+import com.tibiabot.poll.{PollManager, PollListener, PollCommand, PollScheduler, PollVotesCommand, PollEditCommand}
 
 import java.awt.Color
 import java.sql.{Connection, DriverManager, Timestamp}
@@ -111,6 +111,8 @@ object BotApp extends App with StrictLogging {
   
   private val pollCommand = new PollCommand(pollManager)
   private val pollListener = new PollListener(pollManager, pollCommand)
+  private val pollVotesCommand = new PollVotesCommand(pollManager)
+  private val pollEditCommand = new PollEditCommand(pollManager)
   
   logger.info("✅ Poll System initialized")
   // === END POLL SYSTEM INITIALIZATION ===
@@ -129,7 +131,7 @@ object BotApp extends App with StrictLogging {
   .setMemberCachePolicy(MemberCachePolicy.ALL)
   .setChunkingFilter(ChunkingFilter.ALL)
   .addEventListeners(pollListener)  // <-- POLL LISTENER MUSI BYĆ PIERWSZY!
-  .addEventListeners(new BotListener())
+  .addEventListeners(new BotListener(pollVotesCommand, pollEditCommand))
   .addEventListeners(new SplitLootListener())
   .addEventListeners(new com.tibiabot.rashid.RashidListener())
   .addEventListeners(new com.tibiabot.info.InfoListener())
@@ -140,6 +142,70 @@ object BotApp extends App with StrictLogging {
 
   jda.awaitReady()
   logger.info("JDA ready")
+  
+logger.info("JDA ready")
+
+// 🔄 AUTO-RECONNECT RADIA PO RESTARCIE BOTA
+logger.info("🔄 Inicjalizacja systemu auto-restart radia...")
+
+// Utwórz tabelę jeśli nie istnieje
+RadioStateRepository.createTableIfNotExists()
+
+// Załaduj wszystkie aktywne sesje radia z bazy
+val activeRadioSessions = RadioStateRepository.getAllActiveRadioStates()
+
+if (activeRadioSessions.nonEmpty) {
+  logger.info(s"📻 Znaleziono ${activeRadioSessions.size} aktywnych sesji radia do przywrócenia")
+  
+  // Poczekaj 5 sekund żeby JDA w pełni się połączyło
+  Thread.sleep(5000)
+  
+  activeRadioSessions.foreach { radioState =>
+    try {
+      val guild = jda.getGuildById(radioState.guildId)
+      
+      if (guild != null) {
+        val voiceChannel = guild.getVoiceChannelById(radioState.channelId)
+        
+        if (voiceChannel != null) {
+          logger.info(s"🔄 Przywracanie radia dla guild ${guild.getName} na kanale ${voiceChannel.getName}")
+          
+          // Połącz z kanałem
+          val audioManager = guild.getAudioManager
+          audioManager.openAudioConnection(voiceChannel)
+          audioManager.setSendingHandler(AudioManager.getAudioSendHandler(guild.getIdLong))
+          
+          // Załaduj i graj stream
+          AudioManager.loadAndPlay(
+            guild.getIdLong,
+            radioState.streamUrl,
+            track => {
+              logger.info(s"✅ Radio automatycznie przywrócone dla guild ${guild.getName}")
+            },
+            error => {
+              logger.error(s"❌ Nie udało się przywrócić radia dla guild ${guild.getName}: $error")
+              // Usuń ze stanu jeśli nie działa
+              RadioStateRepository.removeRadioState(radioState.guildId)
+            }
+          )
+        } else {
+          logger.warn(s"⚠️ Kanał głosowy ${radioState.channelId} nie istnieje, usuwam stan")
+          RadioStateRepository.removeRadioState(radioState.guildId)
+        }
+      } else {
+        logger.warn(s"⚠️ Guild ${radioState.guildId} nie znaleziony, usuwam stan")
+        RadioStateRepository.removeRadioState(radioState.guildId)
+      }
+    } catch {
+      case e: Exception =>
+        logger.error(s"❌ Błąd podczas przywracania radia dla guild ${radioState.guildId}: ${e.getMessage}")
+    }
+  }
+  
+  logger.info("✅ Auto-reconnect radia zakończony")
+} else {
+  logger.info("ℹ️ Brak aktywnych sesji radia do przywrócenia")
+}
 
 // === START NICKNAME UPDATE SCHEDULER ===
 logger.info("🔄 Creating nickname update scheduler...")
@@ -577,7 +643,7 @@ private val radioCommand: SlashCommandData = Commands.slash("radio", "Włącz/wy
   .setGuildOnly(true)
 
 
-lazy val commands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, splitLootCommand, rashidCommand, infoCommand,  ImbueCommand.command, serverStatsCommand, eventCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), postacInfoCommand, changeNickCommand, radioCommand, pollCommand.command)
+lazy val commands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, splitLootCommand, rashidCommand, infoCommand,  ImbueCommand.command, serverStatsCommand, eventCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), postacInfoCommand, changeNickCommand, radioCommand, pollCommand.command, pollVotesCommand.command, pollEditCommand.command)
 
   // create the deaths/levels cache db
   createCacheDatabase()

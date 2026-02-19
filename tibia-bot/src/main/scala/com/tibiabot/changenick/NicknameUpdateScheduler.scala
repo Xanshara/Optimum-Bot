@@ -26,7 +26,7 @@ class NicknameUpdateScheduler(
 )(implicit ec: ExecutionContext, actorSystem: ActorSystem) extends StrictLogging {
 
   // Pattern do rozpoznawania nicków: emoji Name [123]
-  private val nicknamePattern: Regex = """^[\p{So}\p{Sk}]\s+(.+?)\s+\[(\d+)\]$""".r
+  private val nicknamePattern: Regex = """^\S+\s+(.+?)\s+\[(\d+)\]$""".r
   
   // Scheduler - uruchamia się co 24h
   private var schedulerTask: Option[Cancellable] = None
@@ -83,6 +83,8 @@ class NicknameUpdateScheduler(
     members.foreach { member =>
       val currentNick = member.getEffectiveName
       
+      logger.info(s"Checking member: $currentNick")
+      
       // Sprawdź czy nick pasuje do wzorca: emoji Name [level]
       nicknamePattern.findFirstMatchIn(currentNick) match {
         case Some(m) =>
@@ -90,7 +92,7 @@ class NicknameUpdateScheduler(
           val currentLevel = m.group(2).toInt
           
           checkedCount += 1
-          logger.debug(s"Found character: $characterName (current level: $currentLevel)")
+          logger.info(s"Found character: $characterName (current level: $currentLevel)")
           
           // Dodaj małe opóźnienie między requestami (500ms)
           Thread.sleep(500)
@@ -142,11 +144,11 @@ class NicknameUpdateScheduler(
                   logger.debug(s"⚠️ Cannot interact with member: ${member.getUser.getName} (hierarchy)")
                 }
               } else if (apiLevel > 0) {
-                logger.debug(s"✓ Level unchanged: ${character.name} (still $currentLevel)")
+                logger.info(s"✓ Level unchanged: ${character.name} (still $currentLevel)")
               }
               
             case Success(Left(error)) =>
-              logger.debug(s"Character not found: $characterName - $error")
+              logger.info(s"Character not found: $characterName - $error")
               
             case Failure(exception) =>
               logger.warn(s"API error for character $characterName: ${exception.getMessage}")
@@ -154,7 +156,7 @@ class NicknameUpdateScheduler(
           
         case None =>
           // Nick nie pasuje do wzorca - pomijamy
-          ()
+          logger.info(s"⚠️ Skipping (no regex match): $currentNick")
       }
     }
     

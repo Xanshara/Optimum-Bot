@@ -25,7 +25,7 @@ import com.tibiabot.events.EventIntegration
 
 case class PendingScreenshot(charName: String, deathTime: Long, messageId: String, guildId: String, world: String, userId: String, channelId: String)
 
-class BotListener extends ListenerAdapter with StrictLogging {
+class BotListener(pollVotesCommand: com.tibiabot.poll.PollVotesCommand, pollEditCommand: com.tibiabot.poll.PollEditCommand) extends ListenerAdapter with StrictLogging {
 
   private val pendingScreenshots = mutable.Map[String, PendingScreenshot]()
 
@@ -45,12 +45,17 @@ class BotListener extends ListenerAdapter with StrictLogging {
       return
     }
     
-    // Ignoruj poll - obsługuje to PollListener
+    // Ignoruj TYLKO poll - obsługuje to PollListener
     if (event.getName == "poll") {
       return
     }
 
-    event.deferReply(true).queue()
+    // NIE rób deferReply dla pollvotes i polledit (robią to same!)
+    val shouldDefer = event.getName != "pollvotes" && event.getName != "polledit"
+    
+    if (shouldDefer) {
+      event.deferReply(true).queue()
+    }
     if (BotApp.startUpComplete) {
       event.getName match {
         //case "reload" =>
@@ -87,6 +92,10 @@ class BotListener extends ListenerAdapter with StrictLogging {
           handleBoosted(event)
         case "leaderboards" =>
           handleLeaderboards(event)
+        case "pollvotes" =>
+          pollVotesCommand.handle(event)
+        case "polledit" =>
+          pollEditCommand.handle(event)
         case _ =>
       }
     } else {

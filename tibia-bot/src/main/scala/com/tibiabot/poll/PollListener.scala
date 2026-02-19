@@ -432,9 +432,9 @@ class PollListener(pollManager: PollManager, pollCommand: PollCommand) extends L
           val durationStr = Option(event.getValue("duration")).map(_.getAsString).getOrElse("60")
           val duration = parseDuration(durationStr).getOrElse(60)
           
-          // Walidacja - maksymalnie 7 dni (10080 minut)
-          if (duration < 1 || duration > 10080) {
-            event.reply(s"${Config.noEmoji} Czas trwania musi być między 1 minutą a 7 dniami!")
+          // Walidacja - maksymalnie 60 dni (86400 minut)
+          if (duration < 1 || duration > 86400) {
+            event.reply(s"${Config.noEmoji} Czas trwania musi być między 1 minutą a 60 dniami!")
               .setEphemeral(true).queue()
             return
           }
@@ -559,8 +559,8 @@ class PollListener(pollManager: PollManager, pollCommand: PollCommand) extends L
             return
           }
           
-          if (duration < 1 || duration > 10080) {
-            event.reply(s"${Config.noEmoji} Czas trwania musi być między 1 minutą a 7 dniami (10080 minut)!")
+          if (duration < 1 || duration > 86400) {
+            event.reply(s"${Config.noEmoji} Czas trwania musi być między 1 minutą a 60 dniami (86400 minut)!")
               .setEphemeral(true).queue()
             return
           }
@@ -675,8 +675,8 @@ class PollListener(pollManager: PollManager, pollCommand: PollCommand) extends L
             return
           }
           
-          if (duration < 1 || duration > 10080) {
-            event.reply(s"${Config.noEmoji} Czas trwania musi być między 1 minutą a 7 dniami (10080 minut)!")
+          if (duration < 1 || duration > 86400) {
+            event.reply(s"${Config.noEmoji} Czas trwania musi być między 1 minutą a 60 dniami (86400 minut)!")
               .setEphemeral(true).queue()
             return
           }

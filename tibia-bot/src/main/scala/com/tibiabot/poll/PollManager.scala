@@ -383,6 +383,31 @@ class PollManager extends StrictLogging {
   }
 
   /**
+   * Aktualizuje czas zakończenia ankiety
+   */
+  def updatePollEndTime(pollId: String, newEndsAt: ZonedDateTime): Try[Unit] = {
+    var conn: Connection = null
+    try {
+      conn = DriverManager.getConnection(url, username, password)
+      
+      val stmt = conn.prepareStatement("UPDATE polls SET ends_at = ? WHERE poll_id = ?")
+      stmt.setTimestamp(1, Timestamp.from(newEndsAt.toInstant))
+      stmt.setString(2, pollId)
+      stmt.executeUpdate()
+      stmt.close()
+      
+      logger.info(s"✅ Poll $pollId end time updated to $newEndsAt")
+      Success(())
+    } catch {
+      case e: Exception =>
+        logger.error(s"❌ Error updating poll end time $pollId", e)
+        Failure(e)
+    } finally {
+      if (conn != null) conn.close()
+    }
+  }
+
+  /**
    * Pobiera głos użytkownika dla danej ankiety
    */
   def getUserVote(pollId: String, userId: String): Option[List[Int]] = {
@@ -411,6 +436,46 @@ class PollManager extends StrictLogging {
       case e: Exception =>
         logger.error(s"❌ Error getting user vote: poll=$pollId, user=$userId", e)
         None
+    } finally {
+      if (conn != null) conn.close()
+    }
+  }
+
+  /**
+   * Pobiera szczegółowe głosy (userId → opcje) dla ankiety
+   * Zwraca listę: (userId, List[optionIndex])
+   */
+  def getDetailedVotes(pollId: String): List[(String, List[Int])] = {
+    var conn: Connection = null
+    try {
+      conn = DriverManager.getConnection(url, username, password)
+      val stmt = conn.prepareStatement(
+        """
+        SELECT user_id, option_indices
+        FROM poll_votes
+        WHERE poll_id = ?
+        ORDER BY voted_at ASC
+        """
+      )
+      stmt.setString(1, pollId)
+      
+      val rs = stmt.executeQuery()
+      val votes = ListBuffer[(String, List[Int])]()
+      
+      while (rs.next()) {
+        val userId = rs.getString("user_id")
+        val indicesArray = rs.getArray("option_indices").getArray.asInstanceOf[Array[java.lang.Integer]]
+        val indices = indicesArray.map(_.intValue()).toList
+        votes += ((userId, indices))
+      }
+      
+      rs.close()
+      stmt.close()
+      votes.toList
+    } catch {
+      case e: Exception =>
+        logger.error(s"❌ Error getting detailed votes for poll $pollId", e)
+        List.empty
     } finally {
       if (conn != null) conn.close()
     }
