@@ -1,0 +1,45 @@
+🚀 OPTIMUM BOT v2.3d — CHANGELOG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NOWE FUNKCJE
+
+📊 Ankiety  /poll  /poll_votes  /poll_edit
+↳ Jednokrotny/wielokrotny wybór, 2–10 opcji, auto-zakończenie z wynikami
+
+📡 Radio  /radio
+↳ Stream audio na kanale głosowym, auto-przywracanie po restarcie bota
+
+📈 Statystyki serwera  /serverstats
+↳ Dynamiczne kanały głosowe: members, online, bots, channels i więcej
+
+🏷️ Zarządzanie nickami  /changenick
+↳ Synchronizacja nicków z levelami Tibii, auto-update co 12h
+
+🔎 Info o postaci  /postac_info
+↳ Level, vocation, gildia, last login, former names + linki
+
+🗓️ Eventy  /event
+↳ Tworzenie eventów, role: tank / healer / dps / waitlist
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ISTNIEJĄCE FUNKCJE
+
+⚔️ Tracking  /hunted  /allies  /neutral
+↳ Monitoring graczy i gildii — śmierci, levele, aktywność, name change
+
+🚫 Blacklist  /blacklist  — lista graczy z auto-aktualizacją statusu co 2 min
+
+🎭 Reaction Roles  /reactionrole  — przyznawanie ról przez reakcje
+
+🗺️ Rashid  /rashid  — lokalizacja + auto-powiadomienie o 10:15
+
+📰 Newsy Tibia  — auto-powiadomienia z tibia.com co godzinę
+
+💰 Split Loot  /split_loot  — kalkulator podziału łupu z party
+
+🐉 Boosted  /boosted  — powiadomienia o boosted boss/creature
+
+⚙️ Setup  /setup  /repair  /remove  — konfiguracja światów i kanałów
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🛠️ v2.3d | Scala · JDA · PostgreSQL
+Optimum Bot — Sinrac · od 7 stycznia 2026
