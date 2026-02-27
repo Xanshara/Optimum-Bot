@@ -18,18 +18,25 @@ class EventReminder(
    */
   def checkAndSendReminders(): Unit = {
     try {
+      // Konfigurowalny reminder
       logger.debug("Checking for events needing reminders...")
       val eventsNeedingReminder = eventService.getEventsNeedingReminder()
-      
-      if (eventsNeedingReminder.isEmpty) {
-        logger.debug("No events need reminders at this time")
-      } else {
-        logger.info(s"Found ${eventsNeedingReminder.size} event(s) needing reminders")
+      if (eventsNeedingReminder.nonEmpty) {
+        logger.info(s"Found ${eventsNeedingReminder.size} event(s) needing configurable reminder")
+        eventsNeedingReminder.foreach { event =>
+          logger.info(s"Processing reminder for event ${event.id}: ${event.title}")
+          sendReminder(event)
+        }
       }
-      
-      eventsNeedingReminder.foreach { event =>
-        logger.info(s"Processing reminder for event ${event.id}: ${event.title}")
-        sendReminder(event)
+
+      // Stały reminder 10h przed eventem
+      val eventsNeedingFixedReminder = eventService.getEventsNeedingFixedReminder()
+      if (eventsNeedingFixedReminder.nonEmpty) {
+        logger.info(s"Found ${eventsNeedingFixedReminder.size} event(s) needing fixed 10h reminder")
+        eventsNeedingFixedReminder.foreach { event =>
+          logger.info(s"Processing fixed 10h reminder for event ${event.id}: ${event.title}")
+          sendFixedReminder(event)
+        }
       }
     } catch {
       case e: Exception =>
@@ -38,11 +45,14 @@ class EventReminder(
   }
   
   /**
-   * Wysyła przypomnienie dla eventu
+   * Wysyła przypomnienie dla eventu (konfigurowalny)
    */
   private def sendReminder(event: Event): Unit = {
     try {
-      val channel = jda.getTextChannelById(event.channelId)
+      val channel = Option(jda.getTextChannelById(event.channelId))
+        .orElse(Option(jda.getThreadChannelById(event.channelId)))
+        .map(_.asInstanceOf[net.dv8tion.jda.api.entities.channel.middleman.MessageChannel])
+        .orNull
       if (channel == null) {
         logger.warn(s"Channel ${event.channelId} not found for event ${event.id}")
         eventService.markReminderAsSent(event.id) // Oznacz jako wysłane aby nie próbować ponownie
@@ -130,6 +140,83 @@ class EventReminder(
     } catch {
       case e: Exception =>
         logger.error(s"Error sending reminder for event ${event.id}", e)
+    }
+  }
+
+  /**
+   * Stały reminder 10h przed eventem — nie można wyłączyć
+   */
+  private def sendFixedReminder(event: Event): Unit = {
+    try {
+      val channel = Option(jda.getTextChannelById(event.channelId))
+        .orElse(Option(jda.getThreadChannelById(event.channelId)))
+        .map(_.asInstanceOf[net.dv8tion.jda.api.entities.channel.middleman.MessageChannel])
+        .orNull
+      if (channel == null) {
+        logger.warn(s"Channel ${event.channelId} not found for fixed reminder event ${event.id}")
+        eventService.markFixedReminderAsSent(event.id)
+        return
+      }
+
+      val now          = System.currentTimeMillis()
+      val minutesUntil = ((event.eventTime.getTime - now) / 1000 / 60).toInt
+
+      if (minutesUntil < 0) {
+        eventService.markFixedReminderAsSent(event.id)
+        return
+      }
+
+      val hoursUntil = minutesUntil / 60
+      val timeText = if (minutesUntil < 60) s"$minutesUntil minut"
+                     else if (hoursUntil == 1) "1 godzinę"
+                     else s"$hoursUntil godzin"
+
+      val mentionText = event.mentionRoleId match {
+        case Some(-1L)    => "@everyone"
+        case Some(-2L)    => "@here"
+        case Some(roleId) => s"<@&$roleId>"
+        case None         => ""
+      }
+
+      val embed = new net.dv8tion.jda.api.EmbedBuilder()
+        .setTitle(s"⏰ Przypomnienie: ${event.title}")
+        .setDescription(s"**${event.title}** zaczyna się za **$timeText**!")
+        .setColor(java.awt.Color.YELLOW)
+        .addField("Event Time", new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(event.eventTime), true)
+        .build()
+
+      val messageContent = if (mentionText.nonEmpty) mentionText else " "
+
+      channel.retrieveMessageById(event.messageId).queue(
+        msg => {
+          channel.sendMessage(messageContent)
+            .setEmbeds(embed)
+            .addActionRow(
+              net.dv8tion.jda.api.interactions.components.buttons.Button.link(msg.getJumpUrl, "View Event")
+            )
+            .queue(
+              _ => {
+                logger.info(s"✅ Sent fixed 10h reminder for event ${event.id}")
+                eventService.markFixedReminderAsSent(event.id)
+              },
+              err => logger.error(s"Failed to send fixed reminder for event ${event.id}", err)
+            )
+        },
+        _ => {
+          channel.sendMessage(messageContent)
+            .setEmbeds(embed)
+            .queue(
+              _ => {
+                logger.info(s"✅ Sent fixed 10h reminder for event ${event.id} (no link)")
+                eventService.markFixedReminderAsSent(event.id)
+              },
+              err => logger.error(s"Failed to send fixed reminder for event ${event.id}", err)
+            )
+        }
+      )
+    } catch {
+      case e: Exception =>
+        logger.error(s"Error sending fixed reminder for event ${event.id}", e)
     }
   }
 }

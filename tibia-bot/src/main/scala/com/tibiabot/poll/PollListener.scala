@@ -49,6 +49,8 @@ class PollListener(pollManager: PollManager, pollCommand: PollCommand) extends L
       handleSecondModalButton(event)
     } else if (buttonId.startsWith("poll_third_modal:")) {
       handleThirdModalButton(event)
+    } else if (buttonId.startsWith("poll_edit_time:")) {
+      handleEditTimeButton(event)
     }
   }
 
@@ -65,6 +67,8 @@ class PollListener(pollManager: PollManager, pollCommand: PollCommand) extends L
       handleSecondModalFor6to10(event)
     } else if (modalId.startsWith("poll_create:")) {
       handlePollCreation(event)
+    } else if (modalId.startsWith("poll_edit_time:")) {
+      handleEditTimeModal(event)
     }
   }
 
@@ -784,7 +788,14 @@ class PollListener(pollManager: PollManager, pollCommand: PollCommand) extends L
           case scala.util.Success(_) =>
             // Zaktualizuj menu z prawdziwym pollId
             val updatedMenu = createVoteMenu(pollId, options, allowMultiple)
-            message.editMessageComponents(ActionRow.of(updatedMenu)).queue()
+            
+            // Dodaj button "Edytuj czas" (tylko dla adminów)
+            val editTimeButton = Button.secondary(s"poll_edit_time:$pollId", "⏰ Edytuj czas")
+            
+            message.editMessageComponents(
+              ActionRow.of(updatedMenu),
+              ActionRow.of(editTimeButton)
+            ).queue()
             
             val pollType = if (allowMultiple) "wielokrotnego" else "jednokrotnego"
             logger.info(s"✅ Poll ($pollType wyboru) created: $pollId by ${event.getUser.getAsTag}")
@@ -990,7 +1001,12 @@ class PollListener(pollManager: PollManager, pollCommand: PollCommand) extends L
           val typeInfo = if (poll.allowMultiple) "Wielokrotny wybór" else "Jednokrotny wybór"
           builder.setFooter(s"Zakończenie: $endsAtFormatted | $typeInfo | Głosujących: $totalVoters")
           
-          message.editMessageEmbeds(builder.build()).queue()
+          // WAŻNE: Zachowaj istniejące komponenty (menu + button)
+          val existingComponents = message.getActionRows
+          
+          message.editMessageEmbeds(builder.build())
+            .setComponents(existingComponents)
+            .queue()
           
         case None =>
           logger.warn(s"Poll not found: $pollId")
@@ -1137,5 +1153,202 @@ class PollListener(pollManager: PollManager, pollCommand: PollCommand) extends L
     builder.setFooter(s"Łączna liczba głosujących: $totalVoters")
     
     builder.build()
+  }
+
+  /**
+   * Obsługuje kliknięcie buttona "Edytuj czas"
+   */
+  private def handleEditTimeButton(event: ButtonInteractionEvent): Unit = {
+    val pollId = event.getComponentId.substring(15) // Usuń "poll_edit_time:" prefix
+    
+    // Sprawdź uprawnienia - tylko MANAGE_SERVER lub ADMINISTRATOR
+    val member = event.getMember
+    if (member == null ||
+        !(member.hasPermission(net.dv8tion.jda.api.Permission.MANAGE_SERVER) ||
+          member.hasPermission(net.dv8tion.jda.api.Permission.ADMINISTRATOR))) {
+      event.reply(s"${Config.noEmoji} Tylko administratorzy mogą edytować czas ankiety!")
+        .setEphemeral(true)
+        .queue()
+      return
+    }
+
+    // Sprawdź czy ankieta istnieje i jest aktywna
+    pollManager.getPoll(pollId) match {
+      case Some(poll) if !poll.isActive =>
+        event.reply(s"${Config.noEmoji} Ta ankieta jest już nieaktywna!")
+          .setEphemeral(true)
+          .queue()
+
+      case Some(poll) =>
+        // Pokaż modal z polem na nowy czas
+        val timeInput = TextInput.create("new_duration", "Nowy czas trwania", TextInputStyle.SHORT)
+          .setPlaceholder("np. 60, 2h, 7d, 30d, 60d")
+          .setRequired(true)
+          .setMinLength(1)
+          .setMaxLength(10)
+          .build()
+
+        val modal = Modal.create(s"poll_edit_time:$pollId", "⏰ Edytuj czas trwania ankiety")
+          .addActionRow(timeInput)
+          .build()
+
+        event.replyModal(modal).queue()
+
+      case None =>
+        event.reply(s"${Config.noEmoji} Nie znaleziono ankiety!")
+          .setEphemeral(true)
+          .queue()
+    }
+  }
+
+  /**
+   * Obsługuje modal edycji czasu ankiety
+   */
+  private def handleEditTimeModal(event: ModalInteractionEvent): Unit = {
+    val pollId = event.getModalId.substring(15) // Usuń "poll_edit_time:" prefix
+    val newDurationStr = event.getValue("new_duration").getAsString
+
+    event.deferReply(true).queue()
+
+    // Parsuj nowy czas
+    val newDurationMinutes: Int = parseDuration(newDurationStr) match {
+      case Some(minutes) => minutes
+      case None =>
+        event.getHook.editOriginal(s"${Config.noEmoji} Nieprawidłowy format czasu! Użyj np. 60, 2h, 7d, 30d")
+          .queue()
+        return
+    }
+
+    // Walidacja - maksymalnie 60 dni (86400 minut)
+    if (newDurationMinutes < 1 || newDurationMinutes > 86400) {
+      event.getHook.editOriginal(s"${Config.noEmoji} Czas trwania musi być między 1 minutą a 60 dniami!")
+        .queue()
+      return
+    }
+
+    // Pobierz ankietę
+    pollManager.getPoll(pollId) match {
+      case Some(poll) =>
+        // Sprawdź czy ankieta jest aktywna
+        if (!poll.isActive) {
+          event.getHook.editOriginal(s"${Config.noEmoji} Ta ankieta jest już nieaktywna!")
+            .queue()
+          return
+        }
+
+        // Oblicz nowy czas zakończenia: created_at + new_duration
+        val newEndsAt = poll.createdAt.plusMinutes(newDurationMinutes.toLong)
+        val now = ZonedDateTime.now()
+
+        // Sprawdź czy nowy czas nie jest w przeszłości
+        if (newEndsAt.isBefore(now)) {
+          event.getHook.editOriginal(s"${Config.noEmoji} Nowy czas zakończenia jest w przeszłości! Ankieta została utworzona ${poll.createdAt}.")
+            .queue()
+          return
+        }
+
+        // Aktualizuj w bazie
+        pollManager.updatePollEndTime(pollId, newEndsAt) match {
+          case scala.util.Success(_) =>
+            logger.info(s"✅ Database updated: poll $pollId end time changed to $newEndsAt via button")
+
+            // Pobierz poll ponownie z bazy (ze zaktualizowanym czasem)
+            val updatedPoll = pollManager.getPoll(pollId).getOrElse(poll.copy(endsAt = newEndsAt))
+
+            // Aktualizuj wiadomość Discord
+            val guild = event.getJDA.getGuildById(poll.guildId)
+            if (guild != null) {
+              val guildChannel = guild.getGuildChannelById(poll.channelId)
+              if (guildChannel != null) {
+                val messageChannel = guildChannel match {
+                  case tc: net.dv8tion.jda.api.entities.channel.concrete.TextChannel => tc
+                  case tc: net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel => tc
+                  case _ => null
+                }
+
+                if (messageChannel != null) {
+                  messageChannel.retrieveMessageById(poll.messageId).queue(
+                    message => {
+                      // Aktualizuj embed z nowym czasem (zachowaj komponenty!)
+                      val results = pollManager.getResults(pollId)
+                      val totalVoters = pollManager.getTotalVoters(pollId)
+
+                      val builder = new EmbedBuilder()
+                      val titlePrefix = if (updatedPoll.allowMultiple) "📊🔢" else "📊"
+                      builder.setTitle(s"$titlePrefix ${updatedPoll.question}")
+                      builder.setColor(new Color(59, 130, 246))
+
+                      // Wyniki z progress barami
+                      val resultsText = results.map { result =>
+                        val emoji = result.optionIndex match {
+                          case 0 => "🇦"; case 1 => "🇧"; case 2 => "🇨"; case 3 => "🇩"; case 4 => "🇪"
+                          case 5 => "🇫"; case 6 => "🇬"; case 7 => "🇭"; case 8 => "🇮"; case 9 => "🇯"
+                          case _ => "🔘"
+                        }
+                        val bar = createProgressBar(result.percentage)
+                        val count = result.voteCount
+                        val percent = f"${result.percentage}%.1f"
+                        val voteWord = if (count == 1) "głos" else "głosów"
+                        s"$emoji **${result.optionText}**\n$bar $count $voteWord ($percent%)"
+                      }.mkString("\n\n")
+
+                      builder.setDescription(resultsText)
+
+                      // Footer z nowym czasem
+                      val endsAtFormatted = updatedPoll.endsAt.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
+                      val typeInfo = if (updatedPoll.allowMultiple) "Wielokrotny wybór" else "Jednokrotny wybór"
+                      builder.setFooter(s"Zakończenie: $endsAtFormatted | $typeInfo | Głosujących: $totalVoters")
+
+                      // WAŻNE: Zachowaj istniejące komponenty (menu + button)
+                      val existingComponents = message.getActionRows
+
+                      message.editMessageEmbeds(builder.build())
+                        .setComponents(existingComponents)
+                        .queue(
+                          _ => logger.info(s"✅ Updated poll embed for $pollId with new end time: ${updatedPoll.endsAt}"),
+                          error => logger.error(s"❌ Failed to update poll embed for $pollId", error)
+                        )
+                    },
+                    error => logger.error(s"❌ Failed to retrieve message for poll $pollId", error)
+                  )
+                }
+              }
+            }
+
+            val formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            val formattedEndsAt = newEndsAt.format(formatter)
+
+            event.getHook.editOriginal(
+              s"✅ Czas trwania ankiety został zmieniony!\n\n" +
+              s"**Nowy czas:** ${formatDuration(newDurationMinutes)}\n" +
+              s"**Koniec:** $formattedEndsAt\n" +
+              s"*(liczony od momentu utworzenia ankiety: ${poll.createdAt.format(formatter)})*"
+            ).queue()
+
+            logger.info(s"✅ Poll $pollId end time updated from ${poll.endsAt} to $newEndsAt by ${event.getUser.getAsTag} via button")
+
+          case scala.util.Failure(e) =>
+            logger.error(s"Error updating poll end time $pollId", e)
+            event.getHook.editOriginal(s"${Config.noEmoji} Błąd podczas aktualizacji ankiety: ${e.getMessage}")
+              .queue()
+        }
+
+      case None =>
+        event.getHook.editOriginal(s"${Config.noEmoji} Nie znaleziono ankiety!")
+          .queue()
+    }
+  }
+
+  /**
+   * Formatuje czas do wyświetlenia
+   */
+  private def formatDuration(minutes: Int): String = {
+    if (minutes < 60) {
+      s"$minutes minut"
+    } else if (minutes < 1440) {
+      s"${minutes / 60}h"
+    } else {
+      s"${minutes / 1440}d"
+    }
   }
 }

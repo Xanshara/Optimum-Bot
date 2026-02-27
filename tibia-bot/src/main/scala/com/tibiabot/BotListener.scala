@@ -121,9 +121,9 @@ class BotListener(pollVotesCommand: com.tibiabot.poll.PollVotesCommand, pollEdit
 
   override def onModalInteraction(event: ModalInteractionEvent): Unit = {
     val modalId = event.getModalId
-  if (modalId == "event_create" || modalId.startsWith("event_edit:")) {
-    return
-  }
+  if (modalId.startsWith("event_") || modalId.startsWith("poll_") || modalId == "split_loot_modal" || modalId.startsWith("rr_")) {
+  return
+}
     event.deferEdit().queue()
      val user = event.getUser
      val modalValues = event.getValues.asScala.toList

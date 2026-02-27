@@ -170,16 +170,15 @@ if (activeRadioSessions.nonEmpty) {
         if (voiceChannel != null) {
           logger.info(s"🔄 Przywracanie radia dla guild ${guild.getName} na kanale ${voiceChannel.getName}")
           
-          // Połącz z kanałem
-          val audioManager = guild.getAudioManager
-          audioManager.openAudioConnection(voiceChannel)
-          audioManager.setSendingHandler(AudioManager.getAudioSendHandler(guild.getIdLong))
-          
-          // Załaduj i graj stream
+          // Najpierw załaduj stream, dopiero po załadowaniu połącz z kanałem
+          // (żeby bot nie siedział na kanale bez dźwięku i nie został rozłączony)
           AudioManager.loadAndPlay(
             guild.getIdLong,
             radioState.streamUrl,
             track => {
+              val audioManager = guild.getAudioManager
+              audioManager.setSendingHandler(AudioManager.getAudioSendHandler(guild.getIdLong))
+              audioManager.openAudioConnection(voiceChannel)
               logger.info(s"✅ Radio automatycznie przywrócone dla guild ${guild.getName}")
             },
             error => {
@@ -615,6 +614,9 @@ private val eventCommand: SlashCommandData = Commands.slash("event", "Manage eve
       .addOption(OptionType.INTEGER, "event_id", "Event ID", false),
     new SubcommandData("delete", "Delete event")
       .addOption(OptionType.INTEGER, "event_id", "Event ID", false),
+    new SubcommandData("recurring", "Enable or disable recurring for an event")
+      .addOption(OptionType.INTEGER, "event_id", "Event ID", true)
+      .addOption(OptionType.STRING, "action", "on / off", true),
     new SubcommandData("list", "List active events")
   )
 

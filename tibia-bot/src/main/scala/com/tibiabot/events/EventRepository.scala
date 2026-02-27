@@ -1,20 +1,19 @@
 package com.tibiabot.events
 
-import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, Timestamp}
+import java.sql.{Connection, DriverManager, ResultSet, Timestamp}
 import scala.util.{Try, Using}
 import com.typesafe.scalalogging.StrictLogging
 
 class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends StrictLogging {
 
-  private def getConnection: Connection = {
+  private def getConnection: Connection =
     DriverManager.getConnection(dbUrl, dbUser, dbPassword)
-  }
 
   def createTablesIfNotExist(): Unit = {
     Using.resource(getConnection) { conn =>
       val stmt = conn.createStatement()
-      
-      // Tabela events z nowymi polami
+
+      // Tabela events
       stmt.executeUpdate("""
         CREATE TABLE IF NOT EXISTS events (
           id SERIAL PRIMARY KEY,
@@ -32,10 +31,26 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
           reminder_sent BOOLEAN DEFAULT FALSE,
           active BOOLEAN DEFAULT TRUE,
           created_by BIGINT NOT NULL,
-          created_at TIMESTAMP DEFAULT NOW()
+          created_at TIMESTAMP DEFAULT NOW(),
+          is_recurring BOOLEAN DEFAULT FALSE,
+          recurring_interval_days INT,
+          next_event_created BOOLEAN DEFAULT FALSE
         )
       """)
-      
+
+      // Migracja — dodaj kolumny jeśli tabela już istniała bez nich
+      val migrations = List(
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS recurring_interval_days INT",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS next_event_created BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS fixed_reminder_sent BOOLEAN DEFAULT FALSE"
+      )
+      migrations.foreach { sql =>
+        Try(stmt.executeUpdate(sql)).recover {
+          case e => logger.warn(s"Migration skipped: ${e.getMessage}")
+        }
+      }
+
       // Tabela signupów
       stmt.executeUpdate("""
         CREATE TABLE IF NOT EXISTS event_signups (
@@ -46,8 +61,8 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
           PRIMARY KEY (event_id, user_id)
         )
       """)
-      
-      logger.info("Event tables created or already exist")
+
+      logger.info("Event tables ready")
     }
   }
 
@@ -57,11 +72,10 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
         INSERT INTO events (
           guild_id, channel_id, message_id, title, description, event_time,
           tank_limit, healer_limit, dps_limit, mention_role_id, reminder_minutes,
-          created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          created_by, is_recurring, recurring_interval_days
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
       """
-      
       val stmt = conn.prepareStatement(sql)
       stmt.setLong(1, event.guildId)
       stmt.setLong(2, event.channelId)
@@ -73,35 +87,30 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
       stmt.setInt(8, event.healerLimit)
       stmt.setInt(9, event.dpsLimit)
       event.mentionRoleId match {
-        case Some(roleId) => stmt.setLong(10, roleId)
-        case None => stmt.setNull(10, java.sql.Types.BIGINT)
+        case Some(r) => stmt.setLong(10, r)
+        case None    => stmt.setNull(10, java.sql.Types.BIGINT)
       }
       stmt.setInt(11, event.reminderMinutes)
       stmt.setLong(12, event.createdBy)
-      
-      val rs = stmt.executeQuery()
-      if (rs.next()) {
-        event.copy(id = rs.getInt(1))
-      } else {
-        throw new Exception("Failed to create event")
+      stmt.setBoolean(13, event.isRecurring)
+      event.recurringIntervalDays match {
+        case Some(d) => stmt.setInt(14, d)
+        case None    => stmt.setNull(14, java.sql.Types.INTEGER)
       }
+
+      val rs = stmt.executeQuery()
+      if (rs.next()) event.copy(id = rs.getInt(1))
+      else throw new Exception("Failed to create event")
     }
   }
 
   def findById(id: Int): Option[Event] = {
     Try {
       Using.resource(getConnection) { conn =>
-        val stmt = conn.prepareStatement("""
-          SELECT * FROM events WHERE id = ?
-        """)
+        val stmt = conn.prepareStatement("SELECT * FROM events WHERE id = ?")
         stmt.setInt(1, id)
-        
         val rs = stmt.executeQuery()
-        if (rs.next()) {
-          Some(parseEvent(rs))
-        } else {
-          None
-        }
+        if (rs.next()) Some(parseEvent(rs)) else None
       }
     }.toOption.flatten
   }
@@ -109,17 +118,27 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
   def findActiveByGuild(guildId: Long): List[Event] = {
     Try {
       Using.resource(getConnection) { conn =>
-        val stmt = conn.prepareStatement("""
-          SELECT * FROM events WHERE guild_id = ? AND active = TRUE
-          ORDER BY event_time ASC
-        """)
+        val stmt = conn.prepareStatement(
+          "SELECT * FROM events WHERE guild_id = ? AND active = TRUE ORDER BY event_time ASC"
+        )
         stmt.setLong(1, guildId)
-        
         val rs = stmt.executeQuery()
         var events = List.empty[Event]
-        while (rs.next()) {
-          events = events :+ parseEvent(rs)
-        }
+        while (rs.next()) events = events :+ parseEvent(rs)
+        events
+      }
+    }.getOrElse(List.empty)
+  }
+
+  def findAllActive(): List[Event] = {
+    Try {
+      Using.resource(getConnection) { conn =>
+        val stmt = conn.prepareStatement(
+          "SELECT * FROM events WHERE active = TRUE ORDER BY event_time ASC"
+        )
+        val rs = stmt.executeQuery()
+        var events = List.empty[Event]
+        while (rs.next()) events = events :+ parseEvent(rs)
         events
       }
     }.getOrElse(List.empty)
@@ -137,10 +156,13 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
           dps_limit = ?,
           mention_role_id = ?,
           reminder_minutes = ?,
-          active = ?
+          active = ?,
+          is_recurring = ?,
+          recurring_interval_days = ?,
+          next_event_created = ?,
+          fixed_reminder_sent = ?
         WHERE id = ?
       """)
-      
       stmt.setString(1, event.title)
       stmt.setString(2, event.description.orNull)
       stmt.setTimestamp(3, event.eventTime)
@@ -148,13 +170,19 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
       stmt.setInt(5, event.healerLimit)
       stmt.setInt(6, event.dpsLimit)
       event.mentionRoleId match {
-        case Some(roleId) => stmt.setLong(7, roleId)
-        case None => stmt.setNull(7, java.sql.Types.BIGINT)
+        case Some(r) => stmt.setLong(7, r)
+        case None    => stmt.setNull(7, java.sql.Types.BIGINT)
       }
       stmt.setInt(8, event.reminderMinutes)
       stmt.setBoolean(9, event.active)
-      stmt.setInt(10, event.id)
-      
+      stmt.setBoolean(10, event.isRecurring)
+      event.recurringIntervalDays match {
+        case Some(d) => stmt.setInt(11, d)
+        case None    => stmt.setNull(11, java.sql.Types.INTEGER)
+      }
+      stmt.setBoolean(12, event.nextEventCreated)
+      stmt.setBoolean(13, event.fixedReminderSent)
+      stmt.setInt(14, event.id)
       stmt.executeUpdate()
     }
   }
@@ -166,23 +194,60 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
       stmt.executeUpdate()
     }
   }
-  
+
   def deleteAllEvents(): Try[Int] = Try {
     Using.resource(getConnection) { conn =>
       val stmt = conn.prepareStatement("DELETE FROM events")
-      val count = stmt.executeUpdate()
-      count
+      stmt.executeUpdate()
     }
   }
-  
+
   def deleteEventsByGuild(guildId: Long): Try[Int] = Try {
     Using.resource(getConnection) { conn =>
       val stmt = conn.prepareStatement("DELETE FROM events WHERE guild_id = ?")
       stmt.setLong(1, guildId)
-      val count = stmt.executeUpdate()
-      count
+      stmt.executeUpdate()
     }
   }
+
+  // ========== RECURRING ==========
+
+  /**
+   * Znajdź cykliczne eventy gotowe do odnowienia:
+   * - is_recurring = true
+   * - active = false (zamknięte)
+   * - next_event_created = false (jeszcze nie odnowione)
+   * - event_time już minął
+   */
+  def findRecurringEventsToProcess(): List[Event] = {
+    Try {
+      Using.resource(getConnection) { conn =>
+        val stmt = conn.prepareStatement("""
+          SELECT * FROM events
+          WHERE is_recurring = TRUE
+          AND active = FALSE
+          AND next_event_created = FALSE
+          AND event_time < NOW()
+        """)
+        val rs = stmt.executeQuery()
+        var events = List.empty[Event]
+        while (rs.next()) events = events :+ parseEvent(rs)
+        events
+      }
+    }.getOrElse(List.empty)
+  }
+
+  def markNextEventCreated(eventId: Int): Try[Unit] = Try {
+    Using.resource(getConnection) { conn =>
+      val stmt = conn.prepareStatement(
+        "UPDATE events SET next_event_created = TRUE WHERE id = ?"
+      )
+      stmt.setInt(1, eventId)
+      stmt.executeUpdate()
+    }
+  }
+
+  // ========== SIGNUPS ==========
 
   def addSignup(eventId: Int, userId: Long, role: EventRole): Try[Unit] = Try {
     Using.resource(getConnection) { conn =>
@@ -191,24 +256,20 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
         VALUES (?, ?, ?)
         ON CONFLICT (event_id, user_id) DO UPDATE SET role = ?
       """)
-      
+      val roleStr = EventRole.toString(role)
       stmt.setInt(1, eventId)
       stmt.setLong(2, userId)
-      // POPRAWKA: Używamy EventRole.toString zamiast role.name!
-      val roleString = EventRole.toString(role)
-      stmt.setString(3, roleString)
-      stmt.setString(4, roleString)
-      
+      stmt.setString(3, roleStr)
+      stmt.setString(4, roleStr)
       stmt.executeUpdate()
     }
   }
 
   def removeSignup(eventId: Int, userId: Long): Try[Unit] = Try {
     Using.resource(getConnection) { conn =>
-      val stmt = conn.prepareStatement("""
-        DELETE FROM event_signups WHERE event_id = ? AND user_id = ?
-      """)
-      
+      val stmt = conn.prepareStatement(
+        "DELETE FROM event_signups WHERE event_id = ? AND user_id = ?"
+      )
       stmt.setInt(1, eventId)
       stmt.setLong(2, userId)
       stmt.executeUpdate()
@@ -218,18 +279,17 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
   def getSignups(eventId: Int): List[EventSignup] = {
     Try {
       Using.resource(getConnection) { conn =>
-        val stmt = conn.prepareStatement("""
-          SELECT * FROM event_signups WHERE event_id = ? ORDER BY joined_at ASC
-        """)
+        val stmt = conn.prepareStatement(
+          "SELECT * FROM event_signups WHERE event_id = ? ORDER BY joined_at ASC"
+        )
         stmt.setInt(1, eventId)
-        
         val rs = stmt.executeQuery()
         var signups = List.empty[EventSignup]
         while (rs.next()) {
           signups = signups :+ EventSignup(
-            eventId = rs.getInt("event_id"),
-            userId = rs.getLong("user_id"),
-            role = EventRole.fromString(rs.getString("role")).getOrElse(EventRole.Waitlist),
+            eventId  = rs.getInt("event_id"),
+            userId   = rs.getLong("user_id"),
+            role     = EventRole.fromString(rs.getString("role")).getOrElse(EventRole.Waitlist),
             joinedAt = rs.getTimestamp("joined_at")
           )
         }
@@ -237,56 +297,90 @@ class EventRepository(dbUrl: String, dbUser: String, dbPassword: String) extends
       }
     }.getOrElse(List.empty)
   }
-  
+
+  // ========== REMINDERS ==========
+
   def findEventsNeedingReminder(): List[Event] = {
     Try {
       Using.resource(getConnection) { conn =>
         val stmt = conn.prepareStatement("""
-          SELECT * FROM events 
-          WHERE active = TRUE 
+          SELECT * FROM events
+          WHERE active = TRUE
           AND reminder_sent = FALSE
           AND event_time <= NOW() + (reminder_minutes || ' minutes')::INTERVAL
           AND event_time > NOW()
         """)
-        
         val rs = stmt.executeQuery()
         var events = List.empty[Event]
-        while (rs.next()) {
-          events = events :+ parseEvent(rs)
-        }
+        while (rs.next()) events = events :+ parseEvent(rs)
         events
       }
     }.getOrElse(List.empty)
   }
-  
+
+  def findEventsNeedingFixedReminder(): List[Event] = {
+    Try {
+      Using.resource(getConnection) { conn =>
+        val stmt = conn.prepareStatement("""
+          SELECT * FROM events
+          WHERE active = TRUE
+          AND fixed_reminder_sent = FALSE
+          AND event_time <= NOW() + INTERVAL '10 hours'
+          AND event_time > NOW()
+        """)
+        val rs = stmt.executeQuery()
+        var events = List.empty[Event]
+        while (rs.next()) events = events :+ parseEvent(rs)
+        events
+      }
+    }.getOrElse(List.empty)
+  }
+
   def markReminderSent(eventId: Int): Try[Unit] = Try {
     Using.resource(getConnection) { conn =>
-      val stmt = conn.prepareStatement("""
-        UPDATE events SET reminder_sent = TRUE WHERE id = ?
-      """)
+      val stmt = conn.prepareStatement(
+        "UPDATE events SET reminder_sent = TRUE WHERE id = ?"
+      )
       stmt.setInt(1, eventId)
       stmt.executeUpdate()
     }
   }
 
+  def markFixedReminderSent(eventId: Int): Try[Unit] = Try {
+    Using.resource(getConnection) { conn =>
+      val stmt = conn.prepareStatement(
+        "UPDATE events SET fixed_reminder_sent = TRUE WHERE id = ?"
+      )
+      stmt.setInt(1, eventId)
+      stmt.executeUpdate()
+    }
+  }
+
+  // ========== PARSER ==========
+
   private def parseEvent(rs: ResultSet): Event = {
+    val recurringInterval = rs.getInt("recurring_interval_days")
     Event(
-      id = rs.getInt("id"),
-      guildId = rs.getLong("guild_id"),
-      channelId = rs.getLong("channel_id"),
-      messageId = rs.getLong("message_id"),
-      title = rs.getString("title"),
-      description = Option(rs.getString("description")),
-      eventTime = rs.getTimestamp("event_time"),
-      tankLimit = rs.getInt("tank_limit"),
-      healerLimit = rs.getInt("healer_limit"),
-      dpsLimit = rs.getInt("dps_limit"),
-      mentionRoleId = Option(rs.getLong("mention_role_id")).filter(_ != 0),
-      reminderMinutes = rs.getInt("reminder_minutes"),
-      reminderSent = rs.getBoolean("reminder_sent"),
-      active = rs.getBoolean("active"),
-      createdBy = rs.getLong("created_by"),
-      createdAt = rs.getTimestamp("created_at")
+      id                   = rs.getInt("id"),
+      guildId              = rs.getLong("guild_id"),
+      channelId            = rs.getLong("channel_id"),
+      messageId            = rs.getLong("message_id"),
+      title                = rs.getString("title"),
+      description          = Option(rs.getString("description")),
+      eventTime            = rs.getTimestamp("event_time"),
+      tankLimit            = rs.getInt("tank_limit"),
+      healerLimit          = rs.getInt("healer_limit"),
+      dpsLimit             = rs.getInt("dps_limit"),
+      mentionRoleId        = Option(rs.getLong("mention_role_id")).filter(_ != 0),
+      reminderMinutes      = rs.getInt("reminder_minutes"),
+      reminderSent         = rs.getBoolean("reminder_sent"),
+      active               = rs.getBoolean("active"),
+      createdBy            = rs.getLong("created_by"),
+      createdAt            = rs.getTimestamp("created_at"),
+      isRecurring          = rs.getBoolean("is_recurring"),
+      recurringIntervalDays = if (rs.wasNull()) None else Some(recurringInterval),
+      nextEventCreated     = rs.getBoolean("next_event_created"),
+      fixedReminderSent    = rs.getBoolean("fixed_reminder_sent")
     )
   }
 }

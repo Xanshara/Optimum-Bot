@@ -1490,53 +1490,55 @@ class TibiaBot(world: String)(implicit ex: ExecutionContextExecutor, mat: Materi
   private def updateMultiFields(values: List[String], channel: TextChannel, purgeType: String, guildId: String, guildName: String): Unit = {
     var field = ""
     val embedColor = 3092790
-    //get messages
     try {
       var messages = channel.getHistory.retrievePast(100).complete().asScala.filter(m => m.getAuthor.getId.equals(BotApp.botUser)).toList.reverse.asJava
 
-      // val enemyTimer = enemiesListPurgeTimer.getOrElse(guildId, ZonedDateTime.parse("2022-01-01T01:00:00Z"))
-      // if (ZonedDateTime.now().isAfter(neutralTimer.plusHours(6))) {
-      // clear the channel every 6 hours
-      val allyTimer = alliesListPurgeTimer.getOrElse(guildId, ZonedDateTime.parse("2022-01-01T01:00:00Z"))
+      val allyTimer    = alliesListPurgeTimer.getOrElse(guildId, ZonedDateTime.parse("2022-01-01T01:00:00Z"))
       val neutralTimer = neutralsListPurgeTimer.getOrElse(guildId, ZonedDateTime.parse("2022-01-01T01:00:00Z"))
-      val enemyTimer = enemiesListPurgeTimer.getOrElse(guildId, ZonedDateTime.parse("2022-01-01T01:00:00Z"))
-      if (purgeType == "allies") {
-        if (ZonedDateTime.now().isAfter(allyTimer.plusHours(6))) {
-          channel.purgeMessages(messages)
-          alliesListPurgeTimer = alliesListPurgeTimer + (guildId -> ZonedDateTime.now())
-          messages = List.empty.asJava
+      val enemyTimer   = enemiesListPurgeTimer.getOrElse(guildId, ZonedDateTime.parse("2022-01-01T01:00:00Z"))
+
+      val shouldPurge = purgeType match {
+        case "allies"   => ZonedDateTime.now().isAfter(allyTimer.plusHours(6))
+        case "neutrals" => ZonedDateTime.now().isAfter(neutralTimer.plusHours(6))
+        case "enemies"  => ZonedDateTime.now().isAfter(enemyTimer.plusHours(6))
+        case _          => false
+      }
+
+      if (shouldPurge) {
+        // czekamy synchronicznie na zakończenie purge zanim wyślemy nowe wiadomości
+        try {
+          channel.purgeMessages(messages).forEach(f => scala.util.Try(f.get()))
+        } catch {
+          case _: Throwable =>
         }
-      } else if (purgeType == "neutrals") {
-        if (ZonedDateTime.now().isAfter(neutralTimer.plusHours(6))) {
-          channel.purgeMessages(messages)
-          neutralsListPurgeTimer = neutralsListPurgeTimer + (guildId -> ZonedDateTime.now())
-          messages = List.empty.asJava
+        purgeType match {
+          case "allies"   => alliesListPurgeTimer   = alliesListPurgeTimer   + (guildId -> ZonedDateTime.now())
+          case "neutrals" => neutralsListPurgeTimer = neutralsListPurgeTimer + (guildId -> ZonedDateTime.now())
+          case "enemies"  => enemiesListPurgeTimer  = enemiesListPurgeTimer  + (guildId -> ZonedDateTime.now())
+          case _ =>
         }
-      } else if (purgeType == "enemies") {
-        if (ZonedDateTime.now().isAfter(enemyTimer.plusHours(6))) {
-          channel.purgeMessages(messages)
-          enemiesListPurgeTimer = enemiesListPurgeTimer + (guildId -> ZonedDateTime.now())
-          messages = List.empty.asJava
-        }
+        messages = List.empty.asJava
       }
 
       var currentMessage = 0
-		var editDelay = 0  
-    values.foreach { v =>
+      var editDelay = 0
+
+      values.foreach { v =>
         val currentField = field + "\n" + v
-        if (currentField.length >= 4060 || (currentField.length >= 3850 && v.startsWith(s"### ["))) { // don't add field yet, there is still room
+        if (currentField.length >= 4060 || (currentField.length >= 3850 && v.startsWith(s"### ["))) {
           val interimEmbed = new EmbedBuilder()
           interimEmbed.setDescription(field)
           interimEmbed.setColor(embedColor)
           if (currentMessage < messages.size) {
-            // edit the existing message
-             mat.system.scheduler.scheduleOnce(editDelay.milliseconds) {
-				messages.get(currentMessage).editMessageEmbeds(interimEmbed.build()).queue()
-			}
-			editDelay += 400
-          }
-          else {
-            // there isn't an existing message to edit, so post a new one
+            val msgToEdit = messages.get(currentMessage)
+            mat.system.scheduler.scheduleOnce(editDelay.milliseconds) {
+              msgToEdit.editMessageEmbeds(interimEmbed.build()).queue(
+                _ => (),
+                err => logger.warn(s"Failed to edit message for Guild '$guildName': ${err.getMessage}")
+              )
+            }
+            editDelay += 400
+          } else {
             channel.sendMessageEmbeds(interimEmbed.build()).setSuppressedNotifications(true).queue()
           }
           field = v
@@ -1549,46 +1551,56 @@ class TibiaBot(world: String)(implicit ex: ExecutionContextExecutor, mat: Materi
             interimEmbed.setDescription(field)
             interimEmbed.setColor(embedColor)
             if (currentMessage < messages.size) {
-              // edit the existing message
-             mat.system.scheduler.scheduleOnce(editDelay.milliseconds) {
-				messages.get(currentMessage).editMessageEmbeds(interimEmbed.build()).queue()
-			}
-			editDelay += 400
-          }
-            else {
-              // there isn't an existing message to edit, so post a new one
+              val msgToEdit = messages.get(currentMessage)
+              mat.system.scheduler.scheduleOnce(editDelay.milliseconds) {
+                msgToEdit.editMessageEmbeds(interimEmbed.build()).queue(
+                  _ => (),
+                  err => logger.warn(s"Failed to edit message for Guild '$guildName': ${err.getMessage}")
+                )
+              }
+              editDelay += 400
+            } else {
               channel.sendMessageEmbeds(interimEmbed.build()).setSuppressedNotifications(true).queue()
             }
             field = v
             currentMessage += 1
           }
-        } else { // it's full, add the field
+        } else {
           field = currentField
         }
       }
+
       val finalEmbed = new EmbedBuilder()
       finalEmbed.setDescription(field)
       finalEmbed.setColor(embedColor)
       finalEmbed.setFooter("Last updated")
-      val timestamp = OffsetDateTime.now()
-      finalEmbed.setTimestamp(timestamp)
+      finalEmbed.setTimestamp(OffsetDateTime.now())
+
       if (currentMessage < messages.size) {
-		mat.system.scheduler.scheduleOnce(editDelay.milliseconds) {
-			messages.get(currentMessage).editMessageEmbeds(finalEmbed.build()).queue()
-		}
-	  }
-      else {
-        // there isn't an existing message to edit, so post a new one
+        val msgToEdit = messages.get(currentMessage)
+        mat.system.scheduler.scheduleOnce(editDelay.milliseconds) {
+          msgToEdit.editMessageEmbeds(finalEmbed.build()).queue(
+            _ => (),
+            err => logger.warn(s"Failed to edit final message for Guild '$guildName': ${err.getMessage}")
+          )
+        }
+      } else {
         channel.sendMessageEmbeds(finalEmbed.build()).setSuppressedNotifications(true).queue()
       }
+
       if (currentMessage < messages.size - 1) {
-        // delete extra messages
+        // usuń nadmiarowe wiadomości synchronicznie
         val messagesToDelete = messages.subList(currentMessage + 1, messages.size)
-        channel.purgeMessages(messagesToDelete)
+        try {
+          channel.purgeMessages(messagesToDelete).forEach(f => scala.util.Try(f.get()))
+        } catch {
+          case _: Throwable =>
+        }
       }
+
     } catch {
       case e: Exception =>
-      logger.error(s"Failed to update online list for Guild ID: '$guildId' Guild Name: '$guildName': ${e.getMessage}")
+        logger.error(s"Failed to update online list for Guild ID: '$guildId' Guild Name: '$guildName': ${e.getMessage}")
     }
   }
 

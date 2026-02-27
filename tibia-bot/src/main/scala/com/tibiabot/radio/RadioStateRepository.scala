@@ -1,6 +1,7 @@
 package com.tibiabot.radio
 
 import com.typesafe.scalalogging.LazyLogging
+import com.tibiabot.Config
 import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet}
 import scala.util.{Try, Success, Failure}
 
@@ -10,9 +11,9 @@ import scala.util.{Try, Success, Failure}
  */
 object RadioStateRepository extends LazyLogging {
   
-  private val jdbcUrl = sys.env.getOrElse("JDBC_DATABASE_URL", "jdbc:postgresql://localhost:5432/tibia_bot")
-  private val dbUser = sys.env.getOrElse("DB_USER", "postgres")
-  private val dbPassword = sys.env.getOrElse("DB_PASSWORD", "")
+  private val jdbcUrl = s"jdbc:postgresql://${Config.postgresHost}:5432/bot_cache"
+  private val dbUser = "postgres"
+  private val dbPassword = Config.postgresPassword
   
   /**
    * Tworzy tabelę radio_state jeśli nie istnieje
