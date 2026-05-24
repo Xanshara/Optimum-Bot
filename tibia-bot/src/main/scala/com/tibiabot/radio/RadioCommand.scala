@@ -6,55 +6,48 @@ import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEve
 import net.dv8tion.jda.api.hooks.ListenerAdapter
 import com.typesafe.scalalogging.LazyLogging
 
-/**
- * RadioCommand - Listener dla komendy /radio
- * Obsługuje włączanie/wyłączanie streamingu radia na kanałach głosowych
- * Ze wsparciem auto-restart po restarcie bota
- */
 class RadioCommand extends ListenerAdapter with LazyLogging {
-  
-  // Domyślny stream URL (jeśli użytkownik nie poda własnego)
+
   private val DEFAULT_STREAM_URL = "https://rs9-krk2-cyfronet.rmfstream.pl/RMFFM48"
-  
+
   override def onSlashCommandInteraction(event: SlashCommandInteractionEvent): Unit = {
     if (event.getName != "radio") return
-    
+
     val action = event.getOption("action")
     if (action == null) {
       event.reply("❌ Musisz wybrać akcję: on lub off").setEphemeral(true).queue()
       return
     }
-    
+
     action.getAsString.toLowerCase match {
       case "on"  => handleRadioOn(event)
       case "off" => handleRadioOff(event)
       case _     => event.reply("❌ Nieprawidłowa akcja! Użyj: on lub off").setEphemeral(true).queue()
     }
   }
-  
+
   private def handleRadioOn(event: SlashCommandInteractionEvent): Unit = {
     val guild = event.getGuild
     if (guild == null) {
       event.reply("❌ Ta komenda działa tylko na serwerze!").setEphemeral(true).queue()
       return
     }
-    
+
     val channelOption = event.getOption("channel")
     if (channelOption == null) {
       event.reply("❌ Musisz wybrać kanał głosowy!").setEphemeral(true).queue()
       return
     }
-    
+
     val selectedChannel: GuildChannelUnion = channelOption.getAsChannel
-    
+
     if (!selectedChannel.getType.isAudio) {
       event.reply("❌ Musisz wybrać kanał głosowy, a nie tekstowy!").setEphemeral(true).queue()
       return
     }
-    
+
     val voiceChannel = selectedChannel.asVoiceChannel()
-    
-    // Pobierz URL streamu z parametru lub użyj domyślnego
+
     val urlOption = event.getOption("url")
     val streamUrl = if (urlOption != null) {
       val customUrl = urlOption.getAsString.trim
@@ -64,25 +57,23 @@ class RadioCommand extends ListenerAdapter with LazyLogging {
       logger.info(s"Używam domyślnego URL: $DEFAULT_STREAM_URL")
       DEFAULT_STREAM_URL
     }
-    
+
     event.deferReply().queue()
     logger.info(s"Włączanie Radio na kanale ${voiceChannel.getName} (${voiceChannel.getId}) w guild ${guild.getName} (${guild.getId})")
-    logger.info(s"Stream URL: $streamUrl")
-    
-    // Połącz z kanałem
+
     val audioManager = guild.getAudioManager
     audioManager.openAudioConnection(voiceChannel)
     audioManager.setSendingHandler(AudioManager.getAudioSendHandler(guild.getIdLong))
-    
-    // Załaduj i graj stream
+
+    // WAŻNE: przekazujemy voiceChannel.getIdLong żeby AudioManager wiedział gdzie reconnectować
     AudioManager.loadAndPlay(
       guild.getIdLong,
       streamUrl,
+      voiceChannel.getIdLong,
       track => {
         logger.info(s"Radio uruchomione pomyślnie na guild ${guild.getId}")
         val streamName = track.getInfo.title
-        
-        // 💾 ZAPISZ STAN DO BAZY DANYCH
+
         RadioStateRepository.saveRadioState(
           guild.getIdLong,
           voiceChannel.getIdLong,
@@ -93,7 +84,7 @@ class RadioCommand extends ListenerAdapter with LazyLogging {
           case scala.util.Failure(e) =>
             logger.warn(s"⚠️ Nie udało się zapisać stanu radia: ${e.getMessage}")
         }
-        
+
         event.getHook.sendMessage(
           s"✅ **Radio** włączone na kanale **${voiceChannel.getName}**!\n" +
           s"🎵 Odtwarzanie: **$streamName**\n" +
@@ -111,39 +102,35 @@ class RadioCommand extends ListenerAdapter with LazyLogging {
       }
     )
   }
-  
+
   private def handleRadioOff(event: SlashCommandInteractionEvent): Unit = {
     val guild = event.getGuild
     if (guild == null) {
       event.reply("❌ Ta komenda działa tylko na serwerze!").setEphemeral(true).queue()
       return
     }
-    
+
     logger.info(s"Wyłączanie Radio w guild ${guild.getName} (${guild.getId})")
-    
+
     val audioManager = guild.getAudioManager
-    
+
     if (!audioManager.isConnected) {
       event.reply("ℹ️ Bot nie jest obecnie podłączony do żadnego kanału głosowego.").setEphemeral(true).queue()
       return
     }
-    
-    // Najpierw defer żeby Discord wiedział że przetwarzamy
+
     event.deferReply().queue()
-    
-    // Zatrzymaj player i rozłącz
+
     AudioManager.stopPlayer(guild.getIdLong)
     audioManager.closeAudioConnection()
-    
-    // 🗑️ USUŃ STAN Z BAZY DANYCH
+
     RadioStateRepository.removeRadioState(guild.getIdLong) match {
       case scala.util.Success(_) =>
         logger.info(s"✅ Stan radia usunięty z bazy dla guild ${guild.getId}")
       case scala.util.Failure(e) =>
         logger.warn(s"⚠️ Nie udało się usunąć stanu radia: ${e.getMessage}")
     }
-    
-    // Użyj getHook() zamiast reply() bo już zrobiliśmy defer
+
     event.getHook.sendMessage("✅ **Radio wyłączone** - bot rozłączył się z kanału głosowego.").queue()
     logger.info(s"Radio wyłączone pomyślnie na guild ${guild.getId}")
   }

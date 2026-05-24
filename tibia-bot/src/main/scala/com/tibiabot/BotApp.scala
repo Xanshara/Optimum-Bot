@@ -522,6 +522,17 @@ logger.info("Reaction Role system initialized")
       )
     )
 
+  // satchel on/off command - per-guild channel configuration
+  private val satchelCommand: SlashCommandData = Commands.slash("satchel", "Zarządzaj trackerem Galthen's Satchel")
+    .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER))
+    .addSubcommands(
+      new SubcommandData("on", "Włącz tracker Galthen's Satchel na wybranym kanale")
+        .addOptions(
+          new OptionData(OptionType.CHANNEL, "channel", "Kanał, na którym pojawi się tracker", true)
+        ),
+      new SubcommandData("off", "Wyłącz tracker Galthen's Satchel na serwerze")
+    )
+
   // online list config  command
   private val onlineCombineCommand: SlashCommandData = Commands.slash("online", "Configure how the online list is displayed")
     .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER))
@@ -645,7 +656,7 @@ private val radioCommand: SlashCommandData = Commands.slash("radio", "Włącz/wy
   .setGuildOnly(true)
 
 
-lazy val commands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, splitLootCommand, rashidCommand, infoCommand,  ImbueCommand.command, serverStatsCommand, eventCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), postacInfoCommand, changeNickCommand, radioCommand, pollCommand.command, pollVotesCommand.command, pollEditCommand.command)
+lazy val commands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, satchelCommand, splitLootCommand, rashidCommand, infoCommand,  ImbueCommand.command, serverStatsCommand, eventCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), postacInfoCommand, changeNickCommand, radioCommand, pollCommand.command, pollVotesCommand.command, pollEditCommand.command)
 
   // create the deaths/levels cache db
   createCacheDatabase()
@@ -665,7 +676,7 @@ EventIntegration.initialize(
     logger.info(s"📋 Registering commands for guild: ${g.getName} (${g.getId})")
     
     if (g.getIdLong == 1340737877058785352L) { // Optimum Bot Discord
-      val adminCommands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, adminCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), changeNickCommand, radioCommand, pollCommand.command)
+      val adminCommands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, satchelCommand, adminCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), changeNickCommand, radioCommand, pollCommand.command)
       logger.info(s"🔧 Registering ${adminCommands.size} admin commands (including /reactionrole)...")
       g.updateCommands().addCommands(adminCommands.asJava).queue(
         _ => {
@@ -3337,6 +3348,15 @@ logger.info("========== WORLD STREAMS STARTED ==========")
       statement.execute("ALTER TABLE discord_info ADD COLUMN boosted_messageid VARCHAR(255) DEFAULT '0'")
     }
 
+    val satchelExistsQuery = statement.executeQuery("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'discord_info' AND COLUMN_NAME = 'satchel_channel'")
+    val satchelExists = satchelExistsQuery.next()
+    satchelExistsQuery.close()
+
+    // Add the column if it doesn't exist
+    if (!satchelExists) {
+      statement.execute("ALTER TABLE discord_info ADD COLUMN satchel_channel VARCHAR(255) DEFAULT '0'")
+    }
+
     val result = statement.executeQuery(s"SELECT * FROM discord_info")
     var configMap = Map[String, String]()
     while (result.next()) {
@@ -3346,6 +3366,7 @@ logger.info("========== WORLD STREAMS STARTED ==========")
       configMap += ("admin_channel" -> result.getString("admin_channel"))
       configMap += ("boosted_channel" -> result.getString("boosted_channel"))
       configMap += ("boosted_messageid" -> result.getString("boosted_messageid"))
+      configMap += ("satchel_channel" -> Option(result.getString("satchel_channel")).getOrElse("0"))
       configMap += ("flags" -> result.getString("flags"))
       configMap += ("created" -> result.getString("created"))
     }
@@ -3539,6 +3560,60 @@ logger.info("========== WORLD STREAMS STARTED ==========")
     }
 
     conn.close()
+  }
+
+  def updateSatchelChannelConfig(guild: Guild, channelId: String): Unit = {
+    val conn = getConnection(guild)
+    val statement = conn.prepareStatement("UPDATE discord_info SET satchel_channel = ?;")
+    statement.setString(1, channelId)
+    statement.executeUpdate()
+    statement.close()
+    conn.close()
+  }
+
+  def satchelOn(event: SlashCommandInteractionEvent, channelId: String): MessageEmbed = {
+    val guild = event.getGuild
+    val embedBuild = new EmbedBuilder()
+    embedBuild.setColor(3092790)
+
+    val channel = guild.getTextChannelById(channelId)
+    if (channel == null) {
+      embedBuild.setDescription(s"${Config.noEmoji} Kanał o ID `$channelId` nie istnieje na tym serwerze.")
+      return embedBuild.build()
+    }
+
+    if (!checkConfigDatabase(guild)) {
+      embedBuild.setDescription(s"${Config.noEmoji} Najpierw uruchom `/setup` i dodaj świat.")
+      return embedBuild.build()
+    }
+
+    updateSatchelChannelConfig(guild, channelId)
+
+    val galthenEmbed = new EmbedBuilder()
+    galthenEmbed.setColor(3092790)
+    galthenEmbed.setDescription("To jest tracker **[Galthen's Satchel](https://www.tibiawiki.com.br/wiki/Galthen's_Satchel)**.\nZarządzaj swoimi cooldownami tutaj:")
+    galthenEmbed.setThumbnail("https://www.tibiawiki.com.br/wiki/Special:Redirect/file/Galthen's_Satchel.gif")
+    channel.sendMessageEmbeds(galthenEmbed.build()).addActionRow(
+      Button.primary("galthen default", "Cooldowns").withEmoji(Emoji.fromFormatted(Config.satchelEmoji))
+    ).queue()
+
+    embedBuild.setDescription(s"${Config.yesEmoji} Tracker Galthen's Satchel został włączony na kanale <#$channelId>.")
+    embedBuild.build()
+  }
+
+  def satchelOff(event: SlashCommandInteractionEvent): MessageEmbed = {
+    val guild = event.getGuild
+    val embedBuild = new EmbedBuilder()
+    embedBuild.setColor(3092790)
+
+    if (!checkConfigDatabase(guild)) {
+      embedBuild.setDescription(s"${Config.noEmoji} Najpierw uruchom `/setup` i dodaj świat.")
+      return embedBuild.build()
+    }
+
+    updateSatchelChannelConfig(guild, "0")
+    embedBuild.setDescription(s"${Config.yesEmoji} Tracker Galthen's Satchel został wyłączony na tym serwerze.")
+    embedBuild.build()
   }
 
   def worldRetrieveConfig(guild: Guild, world: String): Map[String, String] = {

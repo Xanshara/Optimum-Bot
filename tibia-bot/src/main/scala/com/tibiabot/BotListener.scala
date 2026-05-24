@@ -50,6 +50,10 @@ class BotListener(pollVotesCommand: com.tibiabot.poll.PollVotesCommand, pollEdit
       return
     }
 
+if (Set("ban", "unban", "ban_list", "mute", "unmute", "mute_list", "mod_log", "case", "radio").contains(event.getName)) {
+  return
+}
+
     // NIE rób deferReply dla pollvotes i polledit (robią to same!)
     val shouldDefer = event.getName != "pollvotes" && event.getName != "polledit"
     
@@ -86,6 +90,8 @@ class BotListener(pollVotesCommand: com.tibiabot.poll.PollVotesCommand, pollEdit
           handleRepair(event)
         case "galthen" =>
           handleGalthen(event)
+        case "satchel" =>
+          handleSatchel(event)
         case "online" =>
           handleOnlineList(event)
         case "boosted" =>
@@ -1422,6 +1428,21 @@ class BotListener(pollVotesCommand: com.tibiabot.poll.PollVotesCommand, pollEdit
         }
       case _ =>
         val embed = new EmbedBuilder().setDescription(s"${Config.noEmoji} Invalid subcommand '$subCommand' for `/online`.").build()
+        event.getHook.sendMessageEmbeds(embed).queue()
+    }
+  }
+
+  private def handleSatchel(event: SlashCommandInteractionEvent): Unit = {
+    event.getSubcommandName match {
+      case "on" =>
+        val channelId = event.getOption("channel").getAsChannel.getId
+        val embed = BotApp.satchelOn(event, channelId)
+        event.getHook.sendMessageEmbeds(embed).queue()
+      case "off" =>
+        val embed = BotApp.satchelOff(event)
+        event.getHook.sendMessageEmbeds(embed).queue()
+      case _ =>
+        val embed = new EmbedBuilder().setDescription(s"${Config.noEmoji} Nieznana subkomenda `/satchel`.").setColor(3092790).build()
         event.getHook.sendMessageEmbeds(embed).queue()
     }
   }
