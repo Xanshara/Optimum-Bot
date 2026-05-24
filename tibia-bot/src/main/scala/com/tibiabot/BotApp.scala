@@ -37,6 +37,13 @@ import com.tibiabot.changenick.{ChangeNickListener, NicknameUpdateScheduler}
 import com.tibiabot.radio.{RadioCommand, RadioStateRepository, AudioManager}
 import net.dv8tion.jda.api.entities.channel.ChannelType
 import com.tibiabot.poll.{PollManager, PollListener, PollCommand, PollScheduler, PollVotesCommand, PollEditCommand}
+import com.tibiabot.dreamscar.{DreamScarListener, DreamScarState}
+import java.time.DayOfWeek  // dodaj do existing import java.time
+import sttp.client3._
+import org.jsoup.Jsoup
+import scala.jdk.CollectionConverters._
+import io.circe.parser._
+import io.circe.HCursor
 
 import java.awt.Color
 import java.sql.{Connection, DriverManager, Timestamp}
@@ -98,6 +105,7 @@ object BotApp extends App with StrictLogging {
   case class BoostedStamp(user: String, boostedType: String, boostedName: String)
   case class DeathScreenshot(guildId: String, world: String, characterName: String, deathTime: Long, screenshotUrl: String, addedBy: String, addedName: String, addedAt: ZonedDateTime, messageId: String)
   case class CustomSort(entityType: String, name: String, label: String, emoji: String)
+  case class BossEntry(world: String, boss: String)
 
   implicit private val actorSystem: ActorSystem = ActorSystem()
   implicit private val ex: ExecutionContextExecutor = actorSystem.dispatcher
@@ -138,6 +146,7 @@ object BotApp extends App with StrictLogging {
   .addEventListeners(new ServerStatsListenerExtended())
   .addEventListeners(new CharacterInfoListener(tibiaDataClient)(ex))
   .addEventListeners(new RadioCommand())
+  .addEventListeners(new DreamScarListener())
   .build()
 
   jda.awaitReady()
@@ -269,6 +278,18 @@ logger.info("Reaction Role system initialized")
   var worldsData: Map[String, List[Worlds]] = Map.empty
   var discordsData: Map[String, List[Discords]] = Map.empty
   var worlds: List[String] = Config.worldList
+
+  // Dream Court Boss cycle
+  val bossCycle = Vector(
+    "Plagueroot",
+    "Malofur Mangrinder",
+    "Maxxenius",
+    "Alptramun",
+    "Izcandar the Banished"
+  )
+  val indexOfBoss: Map[String, Int] = bossCycle.zipWithIndex.toMap
+  var dreamScar: Map[String, String] = fetchDreamScarBosses().map(e => e.world -> e.boss).toMap
+  var dreamScarLastCheck: String = System.currentTimeMillis().toString
 
   // Boosted Boss
   val boostedBosses: Future[Either[String, BoostedResponse]] = tibiaDataClient.getBoostedBoss()
@@ -655,8 +676,9 @@ private val radioCommand: SlashCommandData = Commands.slash("radio", "Włącz/wy
   .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
   .setGuildOnly(true)
 
+  private val dreamScarCommand = new DreamScarListener().getCommand()
 
-lazy val commands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, satchelCommand, splitLootCommand, rashidCommand, infoCommand,  ImbueCommand.command, serverStatsCommand, eventCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), postacInfoCommand, changeNickCommand, radioCommand, pollCommand.command, pollVotesCommand.command, pollEditCommand.command)
+lazy val commands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, satchelCommand, splitLootCommand, rashidCommand, infoCommand,  ImbueCommand.command, serverStatsCommand, eventCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), postacInfoCommand, changeNickCommand, radioCommand, pollCommand.command, pollVotesCommand.command, pollEditCommand.command, dreamScarCommand)
 
   // create the deaths/levels cache db
   createCacheDatabase()
@@ -676,7 +698,7 @@ EventIntegration.initialize(
     logger.info(s"📋 Registering commands for guild: ${g.getName} (${g.getId})")
     
     if (g.getIdLong == 1340737877058785352L) { // Optimum Bot Discord
-      val adminCommands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, satchelCommand, adminCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), changeNickCommand, radioCommand, pollCommand.command)
+      val adminCommands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, satchelCommand, adminCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), changeNickCommand, radioCommand, pollCommand.command, dreamScarCommand)
       logger.info(s"🔧 Registering ${adminCommands.size} admin commands (including /reactionrole)...")
       g.updateCommands().addCommands(adminCommands.asJava).queue(
         _ => {
@@ -839,6 +861,13 @@ logger.info("========== DATABASE INITIALIZATION COMPLETE ==========")
 logger.info(s"Total guilds with worlds configured: ${worldsData.size}")
 logger.info(s"Total worlds loaded: ${worldsData.values.map(_.length).sum}")
 
+// Initialize DreamScarState
+DreamScarState.setDreamScarMap(dreamScar)
+DreamScarState.setEmojis(Config.indentEmoji, Config.dreamScarEmoji)
+DreamScarState.setCreatureImageUrlFunc(creatureImageUrl)
+DreamScarState.setRetrieveConfigFunc(discordRetrieveConfig)
+logger.info("✅ Dream Scar system initialized")
+
 // ========== URUCHOM STRUMIENIE DLA WSZYSTKICH ŚWIATÓW ==========
 logger.info("========== STARTING WORLD STREAMS ==========")
 startBot(None, None)
@@ -876,8 +905,19 @@ logger.info("========== WORLD STREAMS STARTED ==========")
       updateOnOdd += 1
     }
     val machineTimeZone = ZoneId.systemDefault()
-    val currentTime = ZonedDateTime.now(ZoneId.of("Australia/Brisbane")).toLocalTime()
-    if (currentTime.isAfter(LocalTime.of(19, 0)) && currentTime.isBefore(LocalTime.of(19, 45))) {
+	val currentTime = ZonedDateTime.now(ZoneId.of("Europe/Warsaw")).toLocalTime()
+    
+    // Dream Court Boss - refresh co 1h
+    try {
+      if (System.currentTimeMillis() - dreamScarLastCheck.toLong > 1L * 60 * 60 * 1000) {
+        dreamScarLastCheck = System.currentTimeMillis().toString
+        dreamScar = shiftAllBossesUp(dreamScar)
+      }
+    } catch {
+      case _ : Throwable => logger.info("Failed to get Dream Boss info from wiki")
+    }
+    
+    if (currentTime.isAfter(LocalTime.of(10, 0)) && currentTime.isBefore(LocalTime.of(10, 45))) {
       try {
         boostedMessages().map { boostedBossAndCreature =>
           val currentBoss = boostedBossAndCreature.boss
@@ -973,7 +1013,18 @@ logger.info("========== WORLD STREAMS STARTED ==========")
                             case _: Throwable => logger.warn(s"Failed to get the boosted boss creature message for deletion in Guild ID: '${guild.getId}' Guild Name: '${guild.getName}':")
                           }
                         }
-                        boostedChannel.sendMessageEmbeds(embeds.asJava)
+                        
+                        // Dodaj Dream Scar embed
+                        val dreamScarDaily = dreamScar.getOrElse("Antica", "World not found")
+                        val dreamScarEmbed = new EmbedBuilder()
+                          .setDescription(s"The Dream Courts boss for today is:\n### ${Config.indentEmoji}${Config.dreamScarEmoji} **[${dreamScarDaily}](https://tibia.fandom.com/wiki/Dream_Scar/Boss_of_the_Day)**")
+                          .setThumbnail(creatureImageUrl(dreamScarDaily))
+                          .setColor(3092790)
+                          .build()
+                        
+                        val finalEmbeds: List[MessageEmbed] = embeds ++ List(dreamScarEmbed)
+                        
+                        boostedChannel.sendMessageEmbeds(finalEmbeds.asJava)
                           .setActionRow(
                             Button.primary("boosted list", "Server Save Notifications").withEmoji(Emoji.fromFormatted(Config.letterEmoji))
                           )
@@ -6584,5 +6635,68 @@ logger.info("========== WORLD STREAMS STARTED ==========")
       conn.close()
     }
     deleted
+  }
+
+  /**
+   * Pobiera bossy Dream Scar z Tibia Wiki
+   */
+  def fetchDreamScarBosses(): List[BossEntry] = {
+    try {
+      val backend = HttpURLConnectionBackend()
+      val apiUrl =
+        "https://tibia.fandom.com/api.php" +
+          "?action=parse" +
+          "&page=Dream_Scar/Boss_of_the_Day" +
+          "&prop=text" +
+          "&format=json"
+      val response = basicRequest
+        .get(uri"$apiUrl")
+        .header("User-Agent", "Mozilla/5.0")
+        .send(backend)
+      val jsonStr = response.body.getOrElse(
+        throw new RuntimeException("Empty response from API")
+      )
+      val parsed = parse(jsonStr).getOrElse(
+        throw new RuntimeException("Invalid JSON from API")
+      )
+      val html = parsed.hcursor
+        .downField("parse")
+        .downField("text")
+        .downField("*")
+        .as[String]
+        .getOrElse(throw new RuntimeException("Could not extract HTML from API response"))
+      val doc = Jsoup.parse(html)
+      val table = doc.select("table.wikitable").first()
+      if (table == null) return Nil
+      table.select("tr")
+        .asScala
+        .drop(1)
+        .flatMap { row =>
+          val cols = row.select("td").asScala
+          if (cols.size >= 2) {
+            Some(BossEntry(cols(0).text().trim, cols(1).text().trim))
+          } else None
+        }
+        .toList
+    } catch {
+      case ex: Exception =>
+        logger.warn(s"Failed to fetch Dream Scar bosses: ${ex.getMessage}")
+        Nil
+    }
+  }
+
+  /**
+   * Przesyła bossy do następnych w cyklu
+   */
+  def shiftAllBossesUp(current: Map[String, String]): Map[String, String] = {
+    current.map { case (world, boss) =>
+      val nextBoss = indexOfBoss.get(boss) match {
+        case Some(idx) =>
+          bossCycle((idx + 1) % bossCycle.length)
+        case None =>
+          boss
+      }
+      world -> nextBoss
+    }
   }
 }

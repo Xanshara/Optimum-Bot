@@ -91,6 +91,7 @@ val helpText =
   }
 
   // Emojis
+  val dreamScarEmoji: String = discord.getString("dreamscar-emoji")
  val nemesisEmoji: String = discord.getString("nemesis-emoji")
  val archfoeEmoji: String = discord.getString("archfoe-emoji")
  val baneEmoji: String = discord.getString("bane-emoji")
