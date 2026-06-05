@@ -70,7 +70,7 @@ class InfoListener extends ListenerAdapter with StrictLogging {
 
       .addField(
         "🛠️ Wersja",
-        "Aktualna wersja bota: **v1.9.0**",
+        "Aktualna wersja bota: **v2.3e**",
         false
       )
 
