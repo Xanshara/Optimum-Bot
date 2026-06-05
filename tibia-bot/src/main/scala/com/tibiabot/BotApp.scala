@@ -44,6 +44,7 @@ import org.jsoup.Jsoup
 import scala.jdk.CollectionConverters._
 import io.circe.parser._
 import io.circe.HCursor
+import com.tibiabot.giveaway.{Giveaway, GiveawayManager, GiveawayListener, GiveawayButtonListener, GiveawayScheduler}
 
 import java.awt.Color
 import java.sql.{Connection, DriverManager, Timestamp}
@@ -124,6 +125,7 @@ object BotApp extends App with StrictLogging {
   
   logger.info("✅ Poll System initialized")
   // === END POLL SYSTEM INITIALIZATION ===
+
 
   // Let the games begin
   logger.info("Starting up")
@@ -250,6 +252,20 @@ jda.addEventListener(new BlacklistListener(blacklistManager))
 private val reactionRoleManager = new ReactionRoleManager(jda)
 jda.addEventListener(new ReactionRoleListener(reactionRoleManager))
 logger.info("Reaction Role system initialized")
+
+// === START GIVEAWAY SYSTEM ===
+logger.info("🎉 Initializing Giveaway System...")
+private val giveawayManager = new GiveawayManager(Config.postgresHost, Config.postgresPassword)
+giveawayManager.createTables()
+private val giveawayScheduler = new GiveawayScheduler(giveawayManager, jda, actorSystem)(ex)
+private val giveawayListener  = new GiveawayListener(giveawayManager, giveawayScheduler)
+private val giveawayBtnListener = new GiveawayButtonListener(giveawayManager)
+jda.addEventListener(giveawayBtnListener)
+jda.addEventListener(giveawayListener)
+giveawayScheduler.start()
+logger.info("✅ Giveaway System initialized")
+// === END GIVEAWAY SYSTEM ===
+
 
   // get the discord servers the bot is in
   private val guilds: List[Guild] = jda.getGuilds.asScala.toList
@@ -678,7 +694,7 @@ private val radioCommand: SlashCommandData = Commands.slash("radio", "Włącz/wy
 
   private val dreamScarCommand = new DreamScarListener().getCommand()
 
-lazy val commands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, satchelCommand, splitLootCommand, rashidCommand, infoCommand,  ImbueCommand.command, serverStatsCommand, eventCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), postacInfoCommand, changeNickCommand, radioCommand, pollCommand.command, pollVotesCommand.command, pollEditCommand.command, dreamScarCommand)
+lazy val commands = List(setupCommand, removeCommand, huntedCommand, alliesCommand, neutralsCommand, fullblessCommand, filterCommand, exivaCommand, helpCommand, repairCommand, onlineCombineCommand, boostedCommand, galthenCommand, satchelCommand, splitLootCommand, rashidCommand, infoCommand,  ImbueCommand.command, serverStatsCommand, eventCommand, new BlacklistListener(blacklistManager).command, ReactionRoleCommands.getCommand(), postacInfoCommand, changeNickCommand, radioCommand, pollCommand.command, pollVotesCommand.command, pollEditCommand.command, dreamScarCommand, giveawayListener.command)
 
   // create the deaths/levels cache db
   createCacheDatabase()
