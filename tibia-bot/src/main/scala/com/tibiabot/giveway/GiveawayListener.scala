@@ -61,6 +61,9 @@ class GiveawayListener(manager: GiveawayManager, scheduler: GiveawayScheduler)
         new SubcommandData("list", "Pokaż aktywne giveawaye na tym serwerze"),
 
         new SubcommandData("delete", "Usuń giveaway (bez losowania zwycięzców)")
+          .addOptions(new OptionData(OptionType.STRING, "id", "ID wiadomości giveaway", true)),
+
+        new SubcommandData("uczestnicy", "Pokaż listę uczestników giveaway")
           .addOptions(new OptionData(OptionType.STRING, "id", "ID wiadomości giveaway", true))
       )
 
@@ -73,8 +76,9 @@ class GiveawayListener(manager: GiveawayManager, scheduler: GiveawayScheduler)
       case "end"    => handleEnd(event)
       case "reroll" => handleReroll(event)
       case "list"   => handleList(event)
-      case "delete" => handleDelete(event)
-      case other    =>
+      case "delete"     => handleDelete(event)
+      case "uczestnicy" => handleUczestnicy(event)
+      case other        =>
         event.reply(s"${Config.noEmoji} Nieznana subkomenda: `$other`").setEphemeral(true).queue()
     }
   }
@@ -258,6 +262,48 @@ class GiveawayListener(manager: GiveawayManager, scheduler: GiveawayScheduler)
                 }
             }
             event.getHook.sendMessage(s"✅ Giveaway `$msgId` usunięty.").queue()
+        }
+    }
+  }
+
+
+  // ─── /giveaway uczestnicy ─────────────────────────────────────────────────
+
+  private def handleUczestnicy(event: SlashCommandInteractionEvent): Unit = {
+    event.deferReply(true).queue()
+    val idStr = event.getOption("id").getAsString.trim
+    parseMessageId(idStr) match {
+      case None =>
+        event.getHook.sendMessage(s"${Config.noEmoji} Nieprawidłowe ID: `$idStr`").queue()
+      case Some(msgId) =>
+        manager.getGiveaway(msgId) match {
+          case None =>
+            event.getHook.sendMessage(s"${Config.noEmoji} Nie znaleziono giveaway `$msgId`.").queue()
+          case Some(g) if g.guildId != event.getGuild.getIdLong =>
+            event.getHook.sendMessage(s"${Config.noEmoji} Ten giveaway nie należy do tego serwera.").queue()
+          case Some(g) =>
+            val entries = manager.getEntries(msgId)
+            val eb = new EmbedBuilder()
+            eb.setTitle(s"🎫 Uczestnicy — ${g.title.getOrElse(g.prize)}")
+            eb.setColor(new Color(0xFF6600))
+
+            if (entries.isEmpty) {
+              eb.setDescription("Brak uczestników.")
+            } else {
+              // Dzielimy na strony po 30 jeśli jest dużo uczestników
+              val lines = entries.zipWithIndex.map { case ((uid, name), i) =>
+                s"`${i + 1}.` <@$uid> ($name)"
+              }
+              // Discord embed description limit: 4096 znaków
+              val desc = lines.mkString("\n")
+              if (desc.length <= 4096) {
+                eb.setDescription(desc)
+              } else {
+                eb.setDescription(lines.take(50).mkString("\n") + s"\n\n*...i ${entries.size - 50} więcej*")
+              }
+              eb.setFooter(s"Łącznie uczestników: ${entries.size}")
+            }
+            event.getHook.sendMessageEmbeds(eb.build()).queue()
         }
     }
   }

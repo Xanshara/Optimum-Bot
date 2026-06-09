@@ -1031,7 +1031,7 @@ logger.info("========== WORLD STREAMS STARTED ==========")
                         }
                         
                         // Dodaj Dream Scar embed
-                        val dreamScarDaily = dreamScar.getOrElse("Antica", "World not found")
+                        val dreamScarDaily = dreamScar.getOrElse("Celesta", "World not found")
                         val dreamScarEmbed = new EmbedBuilder()
                           .setDescription(s"The Dream Courts boss for today is:\n### ${Config.indentEmoji}${Config.dreamScarEmoji} **[${dreamScarDaily}](https://tibia.fandom.com/wiki/Dream_Scar/Boss_of_the_Day)**")
                           .setThumbnail(creatureImageUrl(dreamScarDaily))

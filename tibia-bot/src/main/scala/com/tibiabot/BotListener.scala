@@ -369,6 +369,10 @@ if (Set("ban", "unban", "ban_list", "mute", "unmute", "mute_list", "mod_log", "c
     if (event.getComponentId.startsWith("rr_")) {
       return
     }
+    // Ignoruj buttony giveaway - obsługuje to GiveawayButtonListener
+    if (event.getComponentId == "giveaway_enter") {
+      return
+    }
     val embed = event.getInteraction.getMessage.getEmbeds
     val title = if (!embed.isEmpty) embed.get(0).getTitle else ""
     val button = event.getComponentId

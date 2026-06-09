@@ -20,7 +20,6 @@ class GiveawayButtonListener(manager: GiveawayManager)(implicit ec: ExecutionCon
     manager.getGiveaway(messageId) match {
 
       case None =>
-        // Giveaway nie istnieje — ephemeral odpowiedź
         event.reply("❌ Ten giveaway już się zakończył lub nie istnieje.")
           .setEphemeral(true).queue()
 
@@ -32,20 +31,21 @@ class GiveawayButtonListener(manager: GiveawayManager)(implicit ec: ExecutionCon
         manager.addEntry(messageId, userId, userName) match {
 
           case None =>
-            // Już uczestniczy
-            event.reply("⚠️ Już bierzesz udział w tym giveawayu!")
+            event.reply("⚠️ Wziąłeś już udział w tym giveawayu!")
               .setEphemeral(true).queue()
 
           case Some(newCount) =>
-            // Edytuj embed z nowym licznikiem — używamy deferEdit
-            event.deferEdit().queue()
-            val newEmbed = manager.buildActiveEmbed(g, newCount).build()
-            event.getMessage.editMessageEmbeds(newEmbed)
-              .setComponents(ActionRow.of(manager.enterButton()))
-              .queue(
-                _ => logger.debug(s"Embed giveaway $messageId zaktualizowany ($newCount uczestników)"),
-                err => logger.warn(s"Nie można zaktualizować embeda $messageId: ${err.getMessage}")
-              )
+            // deferEdit → potem edytujemy przez hook (nie przez getMessage)
+            event.deferEdit().queue(_ => {
+              val newEmbed = manager.buildActiveEmbed(g, newCount).build()
+              event.getHook
+                .editOriginalEmbeds(newEmbed)
+                .setComponents(ActionRow.of(manager.enterButton()))
+                .queue(
+                  _ => logger.debug(s"Embed giveaway $messageId zaktualizowany ($newCount uczestników)"),
+                  err => logger.warn(s"Nie można zaktualizować embeda $messageId: ${err.getMessage}")
+                )
+            })
         }
     }
   }
